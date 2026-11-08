@@ -1,0 +1,230 @@
+default_platform(:ios)
+
+platform :ios do
+
+  # ──────────────────────────────────────────────────────────────
+  # Prerequisites:
+  #   - FASTLANE_USER          – App Store Connect Apple ID
+  #   - FASTLANE_PASSWORD      – App‑specific password
+  #   - FASTLANE_SESSION       – (optional) session cookie
+  #   - FASTLANE_TEAM_ID       – Developer Portal team
+  #   - FASTLANE_ITC_TEAM_ID   – App Store Connect team
+  #   - MATCH_PASSWORD         – Git‑repo encryption passphrase
+  #   - MATCH_GIT_URL          – Certificates / profiles repo
+  #   - APP_STORE_CONNECT_API_KEY_ID     – App Store Connect API key
+  #   - APP_STORE_CONNECT_API_ISSUER_ID  – App Store Connect API issuer
+  #   - APP_STORE_CONNECT_API_KEY_BASE64 – Base64‑encoded .p8 key
+  # ──────────────────────────────────────────────────────────────
+
+  # ── Shared build settings ────────────────────────────────────
+  before_all do
+    ENV["FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT"] = "180"
+  end
+
+  # ── App Store Connect API key (authenticates the Dev Portal / match) ──
+  # Returns an api_key hash for `api_key:` params, or nil when the key isn't
+  # configured — letting local runs fall back to username/password via
+  # Appfile/Matchfile. On CI the .p8 is written to ~/.fastlane/api_key.p8 and
+  # APP_STORE_CONNECT_API_KEY_ID / _ISSUER_ID are set, so match can manage
+  # certs & profiles via the API (no password, no 2FA).
+  private_lane :asc_api_key do
+    key_id = ENV["APP_STORE_CONNECT_API_KEY_ID"]
+    issuer_id = ENV["APP_STORE_CONNECT_API_ISSUER_ID"]
+    # NOTE: use `next`, not `return` — lanes are Procs and `return` raises
+    # LocalJumpError when the block is invoked outside its defining scope.
+    next nil if key_id.to_s.empty? || issuer_id.to_s.empty?
+
+    key_filepath = File.expand_path("~/.fastlane/api_key.p8")
+    key_content = ENV["APP_STORE_CONNECT_API_KEY_CONTENT"]
+    has_file = File.exist?(key_filepath) && !File.zero?(key_filepath)
+    has_content = !key_content.to_s.empty?
+    next nil unless has_file || has_content
+
+    app_store_connect_api_key(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      key_filepath: has_file ? key_filepath : nil,
+      key_content: has_content ? key_content : nil,
+      in_house: false,
+    )
+  end
+
+
+  # ── Code signing with match ──────────────────────────────────
+  desc "Fetch certificates and provisioning profiles via match"
+  lane :sync_signing do
+    match(
+      type: "appstore",
+      readonly: is_ci,
+      api_key: asc_api_key,
+      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier),
+      force: false,
+    )
+  end
+
+  # ── Provision (writable match) ──────────────────────────────────
+  desc "Generate/refresh certs & profiles in the match repo (writable)"
+  lane :provision do
+    UI.user_error!(
+      "Refusing to run writable match: set MATCH_WRITABLE=1 to confirm."
+    ) unless ENV["MATCH_WRITABLE"] == "1"
+
+    api_key = asc_api_key
+    if api_key.nil?
+      UI.important(
+        "No App Store Connect API key found (APP_STORE_CONNECT_API_KEY_ID / " \
+        "_ISSUER_ID and ~/.fastlane/api_key.p8). Falling back to Apple ID + " \
+        "password. NOTE: the Developer Portal requires the ACCOUNT password " \
+        "and a valid FASTLANE_SESSION — an app-specific password will be " \
+        "rejected with 'login credentials seem to be wrong'."
+      )
+    end
+
+    match(
+      type: "appstore",
+      readonly: false,
+      api_key: api_key,
+      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier),
+      force: false,
+    )
+  end
+
+
+  # ── Bump build number ────────────────────────────────────────
+  desc "Increment build number (uses CURRENT_PROJECT_VERSION)"
+  private_lane :bump_build do
+    build = latest_testflight_build_number(
+      initial_build_number: 1,
+      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier),
+      username: CredentialsManager::AppfileConfig.try_fetch_value(:apple_id),
+    )
+    increment_build_number(
+      xcodeproj: "solarimsys.xcodeproj",
+      build_number: build + 1,
+    )
+  end
+
+  # ── Restore node_modules if needed ───────────────────────────
+  private_lane :ensure_node_modules do
+    sh("cd .. && npm install --no-audit --no-fund") unless File.directory?("../node_modules/react-native")
+  end
+
+  # ── Install CocoaPods ────────────────────────────────────────
+  private_lane :install_pods do
+    cocoapods(
+      podfile: "./Podfile",
+      try_repo_update_on_error: true,
+    )
+  end
+
+  # ── LINT (Swift / ObjC) ──────────────────────────────────────
+  desc "Run SwiftLint (if installed)"
+  lane :lint do
+    swiftlint(
+      strict: true,
+      ignore_exit_status: false,
+      raise_if_swiftlint_not_installed: false,
+    ) rescue puts "⚠️  SwiftLint not installed – skipping"
+  end
+
+  # ── RUN UNIT TESTS ───────────────────────────────────────────
+  desc "Execute unit tests"
+  lane :test do
+    ensure_node_modules
+    install_pods
+    run_tests(
+      scheme: "solarimsys",
+      workspace: "solarimsys.xcworkspace",
+      destination: "platform=iOS Simulator,name=iPhone 16",
+      derived_data_path: "build/DerivedData",
+      result_bundle: true,
+    )
+  end
+
+  # ── BUILD (Release, no deploy) ───────────────────────────────
+  desc "Build release IPA – smoke-test that archive + export succeeds"
+  lane :build_release do
+    sync_signing
+    bump_build
+    ensure_node_modules
+    install_pods
+    build_app(
+      scheme: "solarimsys",
+      workspace: "solarimsys.xcworkspace",
+      export_method: "app-store",
+      clean: true,
+      output_directory: "build",
+      output_name: "solarimsys.ipa",
+      derived_data_path: "build/DerivedData",
+      include_symbols: true,
+      include_bitcode: false,
+    )
+  end
+
+  # ── BETA – Upload to TestFlight ──────────────────────────────
+  desc "Build and upload a new TestFlight beta build"
+  lane :beta do
+    sync_signing
+    bump_build
+    ensure_node_modules
+    install_pods
+    build_app(
+      scheme: "solarimsys",
+      workspace: "solarimsys.xcworkspace",
+      export_method: "app-store",
+      clean: true,
+      output_directory: "build",
+      output_name: "solarimsys.ipa",
+      derived_data_path: "build/DerivedData",
+      include_symbols: true,
+      include_bitcode: false,
+    )
+    # Internal distribution only: builds go to App Store Connect users on the
+    # team as soon as processing finishes — no Beta App Review, no tester
+    # groups, no Test Information required.
+    #
+    # Do NOT set beta_app_description / beta_app_feedback_email here. Those
+    # make pilot write the app-level betaAppLocalizations resource, which
+    # 404s on an app that has never had Test Information saved in App Store
+    # Connect (fastlane#20723, fastlane#28630). They are only needed for
+    # external distribution, which also requires `groups:` and
+    # `beta_app_review_info:`.
+    changelog = ENV["CHANGELOG"].to_s.strip
+    upload_to_testflight(
+      skip_waiting_for_build_processing: false,
+      distribute_external: false,
+      # Passing nil skips the "What to Test" update entirely; an empty string
+      # would be sent as a real (invalid) value.
+      changelog: changelog.empty? ? nil : changelog,
+    )
+  end
+
+  # ── PRODUCTION – Upload to App Store ─────────────────────────
+  desc "Build and submit to App Store review"
+  lane :release do
+    sync_signing
+    bump_build
+    ensure_node_modules
+    install_pods
+    build_app(
+      scheme: "solarimsys",
+      workspace: "solarimsys.xcworkspace",
+      export_method: "app-store",
+      clean: true,
+      output_directory: "build",
+      output_name: "solarimsys.ipa",
+      derived_data_path: "build/DerivedData",
+      include_symbols: true,
+      include_bitcode: false,
+    )
+    upload_to_app_store(
+      force: true,
+      skip_metadata: false,
+      skip_screenshots: false,
+      automatic_release: false,
+      phased_release: true,
+      precheck_include_in_app_purchases: false,
+    )
+  end
+
+end

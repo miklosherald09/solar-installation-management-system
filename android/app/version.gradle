@@ -1,0 +1,37 @@
+/**
+ * Auto-versioning helper — reads versionName and versionCode from the
+ * project's package.json so they stay in sync automatically.
+ *
+ * Usage in android/app/build.gradle:
+ *   apply from: 'version.gradle'
+ *   ...
+ *   versionCode versionCodeFromPackage
+ *   versionName versionNameFromPackage
+ */
+
+import groovy.json.JsonSlurper
+
+def packageJsonFile = file("${rootDir}/../package.json")
+def packageJson = new JsonSlurper().parseText(packageJsonFile.text)
+
+def fullVersion = packageJson.version as String // e.g. "1.0.0"
+
+// versionName stays as-is (SemVer)
+ext.versionNameFromPackage = fullVersion
+
+// versionCode is a monotonically increasing integer.  We derive it from
+// the SemVer string so that every release has a unique code:
+//   Major × 1,000,000 + Minor × 1,000 + Patch (with 1-indexed patch)
+//   e.g. 1.2.3  →  1,002,003
+//       2.0.0  →  2,000,000
+// You can also override this with a gradle property for CI:
+//   ./gradlew assembleRelease -PversionCode=42
+def parts = fullVersion.tokenize('.')
+if (parts.size() == 3) {
+    ext.versionCodeFromPackage = parts[0].toInteger() * 1_000_000 +
+                                  parts[1].toInteger() * 1_000 +
+                                  parts[2].toInteger()
+} else {
+    // Fallback for non-standard SemVer strings
+    ext.versionCodeFromPackage = 1
+}

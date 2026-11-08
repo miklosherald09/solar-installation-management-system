@@ -1,0 +1,21 @@
+git_url(ENV["MATCH_GIT_URL"] || "")
+
+storage_mode("git")
+
+type("appstore")
+
+app_identifier(ENV["MATCH_APP_IDENTIFIER"] || CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier))
+
+username(ENV["FASTLANE_USER"] || CredentialsManager::AppfileConfig.try_fetch_value(:apple_id))
+
+team_id(ENV["FASTLANE_TEAM_ID"] || CredentialsManager::AppfileConfig.try_fetch_value(:team_id))
+
+# force_for_new_devices is ignored for type "appstore" (no device list in the
+# profile) and fastlane warns about it on every run — omit it here.
+force(false)
+
+verbose(false)
+
+# If using a shallow clone (CI), uncomment:
+# shallow_clone(true)
+# clone_branch_directly(true)

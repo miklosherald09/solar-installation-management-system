@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "545505886089",
+    "project_id": "workworkwork-459f5",
+    "storage_bucket": "workworkwork-459f5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:545505886089:android:41aefc3155864c664d6b58",
+        "android_client_info": {
+          "package_name": "com.solarimsys"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQr5-CHyko64DzyykzbIJleCJLiolvnlc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

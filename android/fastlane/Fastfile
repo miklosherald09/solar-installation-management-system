@@ -1,0 +1,68 @@
+default_platform(:android)
+
+platform :android do
+
+  desc "Build debug APK"
+  lane :build_debug do
+    gradle(task: "clean assembleDebug")
+  end
+
+  desc "Build release AAB (signing secrets must be in ENV)"
+  lane :build_release do
+    gradle_properties = {
+      "RELEASE_STORE_FILE" => "release.keystore"
+    }
+    gradle_properties["RELEASE_STORE_PASSWORD"] = ENV["RELEASE_STORE_PASSWORD"] if ENV["RELEASE_STORE_PASSWORD"] && !ENV["RELEASE_STORE_PASSWORD"].empty?
+    gradle_properties["RELEASE_KEY_ALIAS"] = ENV["RELEASE_KEY_ALIAS"] if ENV["RELEASE_KEY_ALIAS"] && !ENV["RELEASE_KEY_ALIAS"].empty?
+    gradle_properties["RELEASE_KEY_PASSWORD"] = ENV["RELEASE_KEY_PASSWORD"] if ENV["RELEASE_KEY_PASSWORD"] && !ENV["RELEASE_KEY_PASSWORD"].empty?
+
+    gradle(
+      task: "clean bundleRelease",
+      properties: gradle_properties,
+      flags: "--no-build-cache"
+    )
+  end
+
+  desc "Deploy AAB to Play Store internal testing track"
+  lane :deploy_internal do
+    build_release
+    upload_to_play_store(
+      track: 'internal',
+      aab: 'app/build/outputs/bundle/release/app-release.aab',
+      release_status: 'completed',
+      json_key: ENV["PLAY_STORE_JSON_KEY_FILE"] || "fastlane/play-store-key.json",
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+
+  desc "Deploy AAB to Play Store beta track"
+  lane :deploy_beta do
+    build_release
+    upload_to_play_store(
+      track: 'beta',
+      aab: 'app/build/outputs/bundle/release/app-release.aab',
+      release_status: 'completed',
+      json_key: ENV["PLAY_STORE_JSON_KEY_FILE"] || "fastlane/play-store-key.json",
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+
+  desc "Deploy AAB to Play Store production track"
+  lane :deploy_production do
+    build_release
+    upload_to_play_store(
+      track: 'production',
+      aab: 'app/build/outputs/bundle/release/app-release.aab',
+      release_status: 'completed',
+      json_key: ENV["PLAY_STORE_JSON_KEY_FILE"] || "fastlane/play-store-key.json",
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+
+end

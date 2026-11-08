@@ -1,0 +1,64 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+platform :ios, '15.5'
+prepare_react_native_project!
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+target 'solarimsys' do
+  config = use_native_modules!
+
+  # Required for static library builds (RN 0.86+) when Swift pods like
+  # AppCheckCore depend on non-modular pods (GoogleUtilities, RecaptchaInterop)
+  use_modular_headers!
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+
+    # Apply C++20 only to pods that actually use C++ (Folly-based, React C++ modules).
+    # Applying it to ALL pods (especially pre-built xcframeworks and ObjC-only pods
+    # like GoogleUtilities, RecaptchaInterop) causes compilation failures.
+    cxx_pods = [
+      'React-Fabric', 'React-graphics', 'React-rendererconsistency',
+      'React-renderercss', 'React-rendererdebug',
+      'React-runtimescheduler', 'React-timing', 'React-utils',
+      'React-cxxreact', 'React-callinvoker',
+      'React-hermes', 'React-jsi', 'React-jsiexecutor',
+      'React-jsinspector', 'React-jsinspectorcdp', 'React-jsitooling',
+      'React-jsinspectornetwork', 'React-jsinspectortracing',
+      'React-jserrorhandler', 'React-jsitracing',
+      'React-logger', 'React-Mapbuffer', 'React-oscompat',
+      'React-perflogger', 'React-performancecdpmetrics',
+      'React-performancetimeline', 'React-runtimeexecutor',
+      'React-FabricComponents', 'React-FabricImage',
+      'React-RuntimeApple', 'React-RuntimeCore', 'React-RuntimeHermes',
+      'ReactCodegen',
+    ]
+    installer.pods_project.targets.each do |target|
+      next unless cxx_pods.include?(target.name)
+      target.build_configurations.each do |config|
+        config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++20'
+      end
+    end
+  end
+end
